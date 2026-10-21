@@ -80,7 +80,12 @@ pub fn decode_order_fills(receipt: &Value, wallet: &str, owned: &BTreeMap<String
         let data = log["data"].as_str().context("Missing fill log data")?;
         let bytes = hex::decode(data.strip_prefix("0x").context("Invalid fill encoding")?)?;
         ensure!(bytes.len() == 7 * 32, "Invalid V2 OrderFilled data length");
-        let words: Vec<_> = bytes.chunks_exact(32).map(crate::abi::u256_be).collect();
+        let words: Vec<_> = bytes
+            .as_chunks::<32>()
+            .0
+            .iter()
+            .map(|w| crate::abi::u256_be(w))
+            .collect();
         ensure!(words[0] <= U256::from(1u64), "Unknown fill action");
         let buy = words[0].is_zero();
         let action = if buy { "BUY" } else { "SELL" };
