@@ -136,7 +136,7 @@ pub struct FeedSettings {
     pub max_clock_offset_ms: i64,
     /// A slot whose connection failed after the one before it also failed waits
     /// this long before it opens another, doubled with each further failure in a
-    /// row up to `reconnect_max` (book_feed::RECONNECT_STABLE). Not from the
+    /// row up to `reconnect_max`. Not from the
     /// environment.
     pub reconnect_base: Duration,
     pub reconnect_max: Duration,
@@ -150,13 +150,13 @@ pub struct FeedSettings {
 impl Default for FeedSettings {
     fn default() -> Self {
         Self {
-            connections: 2,
-            lag_limit_ms: 40,
-            lag_excess_ms: 25,
+            connections: 3,
+            lag_limit_ms: 50,
+            lag_excess_ms: 30,
             lag_sustain: Duration::from_secs(3),
             lag_window: Duration::from_secs(2),
             min_lag_samples: 20,
-            max_clock_offset_ms: 30,
+            max_clock_offset_ms: 50,
             reconnect_base: Duration::from_secs(1),
             reconnect_max: Duration::from_secs(30),
             url: WSS_URL.to_string(),
@@ -262,12 +262,7 @@ impl OffsetBounds {
 /// Bounds the local clock's offset from the venue's with `rounds` requests timed at
 /// the venue's second boundaries. `get` answers the venue's whole second;
 /// `wall_ms` is the local wall clock and `sleep_until` waits for a local wall time.
-pub async fn measure_offset<G, GF, W, S, SF>(
-    get: G,
-    wall_ms: W,
-    sleep_until: S,
-    rounds: usize,
-) -> Result<OffsetBounds>
+pub async fn measure_offset<G, GF, W, S, SF>(get: G, wall_ms: W, sleep_until: S, rounds: usize) -> Result<OffsetBounds>
 where
     G: Fn() -> GF,
     GF: Future<Output = Result<i64>>,
@@ -305,7 +300,10 @@ pub fn parse_server_seconds(body: &str) -> Result<i64> {
     match text.parse::<i64>() {
         // 2001 to 5138: anything else is not the venue's clock.
         Ok(s) if (1_000_000_000..=100_000_000_000).contains(&s) => Ok(s),
-        _ => bail!("unexpected /time answer {:?}", body.chars().take(40).collect::<String>()),
+        _ => bail!(
+            "unexpected /time answer {:?}",
+            body.chars().take(40).collect::<String>()
+        ),
     }
 }
 
@@ -371,7 +369,10 @@ mod tests {
     #[test]
     fn settings_come_from_the_environment_strictly() {
         let defaults = FeedSettings::default();
-        assert_eq!((defaults.connections, defaults.lag_limit_ms, defaults.lag_excess_ms), (2, 40, 25));
+        assert_eq!(
+            (defaults.connections, defaults.lag_limit_ms, defaults.lag_excess_ms),
+            (3, 50, 30)
+        );
         assert_eq!(defaults.lag_sustain, Duration::from_secs(3));
         assert_eq!(FeedSettings::from_lookup(&|_| None).unwrap(), defaults);
         let set = |pairs: &'static [(&'static str, &'static str)]| {
@@ -383,7 +384,10 @@ mod tests {
             ("FEED_LAG_SUSTAIN_MS", "5000"),
         ]))
         .unwrap();
-        assert_eq!((s.connections, s.lag_limit_ms, s.lag_sustain), (3, 60, Duration::from_secs(5)));
+        assert_eq!(
+            (s.connections, s.lag_limit_ms, s.lag_sustain),
+            (3, 60, Duration::from_secs(5))
+        );
         for bad in [
             &[("FEED_CONNECTIONS", "0")][..],
             &[("FEED_CONNECTIONS", "two")],

@@ -19,7 +19,8 @@ impl std::str::FromStr for Wallet {
         // The key's bytes are wiped once the signing key holds them (it wipes its own
         // copy when dropped: ecdsa's SigningKey is ZeroizeOnDrop).
         let bytes = zeroize::Zeroizing::new(
-            hex::decode(value.trim().trim_start_matches("0x")).map_err(|_| anyhow::anyhow!("Private key is not hex"))?,
+            hex::decode(value.trim().trim_start_matches("0x"))
+                .map_err(|_| anyhow::anyhow!("Private key is not hex"))?,
         );
         ensure!(bytes.len() == 32, "Private key must be 32 bytes");
         let key = k256::ecdsa::SigningKey::from_slice(&bytes)
@@ -43,10 +44,7 @@ impl Wallet {
     /// RFC 6979 deterministic, low-s signature over a 32-byte digest as
     /// r || s || v with v = 27 or 28.
     pub fn sign_hash(&self, digest: &[u8; 32]) -> Result<[u8; 65]> {
-        let (signature, recovery) = self
-            .key
-            .sign_prehash_recoverable(digest)
-            .context("Signing failed")?;
+        let (signature, recovery) = self.key.sign_prehash_recoverable(digest).context("Signing failed")?;
         let mut out = [0u8; 65];
         out[..64].copy_from_slice(&signature.to_bytes());
         out[64] = recovery.to_byte() + 27;
@@ -73,8 +71,8 @@ pub struct SignedOrder {
 
 /// An order before its signature: its salt and timestamp, and its EIP-712
 /// hash, which is its exchange order ID. sign() gives the signature
-/// SignedOrder carries (the order path signs while its intent's journal write
-/// syncs).
+/// SignedOrder carries (split so the order ID is known before signing, e.g. to
+/// journal the intent while the signature is computed).
 pub struct UnsignedOrder {
     pub salt: u64,
     pub timestamp: u64,
@@ -214,10 +212,7 @@ fn unsigned_order_at(
         maker_amount > 0 && taker_amount > 0 && side <= 1,
         "Invalid order amounts or side"
     );
-    anyhow::ensure!(
-        signature_type <= 2,
-        "Only EOA, proxy and Safe signatures are supported"
-    );
+    anyhow::ensure!(signature_type <= 2, "Only EOA, proxy and Safe signatures are supported");
     let maker: Address = funder.parse()?;
     anyhow::ensure!(
         signature_type != 0 || maker == wallet.address(),
@@ -233,12 +228,7 @@ fn unsigned_order_at(
         side,
         signature_type,
         timestamp,
-        exchange: if neg_risk {
-            NEG_RISK_CTF_EXCHANGE
-        } else {
-            CTF_EXCHANGE
-        }
-        .parse()?,
+        exchange: if neg_risk { NEG_RISK_CTF_EXCHANGE } else { CTF_EXCHANGE }.parse()?,
     };
     let digest = order.signing_hash();
     Ok(UnsignedOrder {
@@ -268,7 +258,8 @@ impl PolymarketOrder {
     fn domain_separator(&self) -> [u8; 32] {
         keccak256(encode(&[
             Token::FixedBytes(
-                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)").to_vec(),
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)")
+                    .to_vec(),
             ),
             Token::FixedBytes(keccak256("Polymarket CTF Exchange").to_vec()),
             Token::FixedBytes(keccak256("2").to_vec()),
@@ -302,13 +293,7 @@ impl PolymarketOrder {
 }
 
 /// Generate HMAC signature for API authentication.
-pub fn hmac_signature(
-    secret: &str,
-    timestamp: &str,
-    method: &str,
-    path: &str,
-    body: &str,
-) -> Result<String> {
+pub fn hmac_signature(secret: &str, timestamp: &str, method: &str, path: &str, body: &str) -> Result<String> {
     use base64::engine::general_purpose::{STANDARD, URL_SAFE, URL_SAFE_NO_PAD};
     use base64::Engine;
     use hmac::{Hmac, Mac};
@@ -349,9 +334,18 @@ mod tests {
         let mut us = Vec::new();
         for _ in 0..20_000 {
             let started = std::time::Instant::now();
-            let signed = sign_order(&wallet, "12345678901234567890", 2500000, 5000000, BUY, "0x1111111111111111111111111111111111111111", false, 1)
-                .await
-                .unwrap();
+            let signed = sign_order(
+                &wallet,
+                "12345678901234567890",
+                2500000,
+                5000000,
+                BUY,
+                "0x1111111111111111111111111111111111111111",
+                false,
+                1,
+            )
+            .await
+            .unwrap();
             us.push(started.elapsed().as_secs_f64() * 1e6);
             std::hint::black_box(signed);
         }
@@ -373,8 +367,7 @@ mod tests {
         // Public deterministic test key (scalar 1), never used for trading.
         let wallet: Wallet = format!("{:064x}", 1).parse().unwrap();
         let vectors: serde_json::Value =
-            serde_json::from_str(include_str!("../../tests/fixtures/clob_v2_orders.json"))
-                .unwrap();
+            serde_json::from_str(include_str!("../../tests/fixtures/clob_v2_orders.json")).unwrap();
         for v in vectors.as_array().unwrap() {
             let signed = sign_order_at(
                 &wallet,

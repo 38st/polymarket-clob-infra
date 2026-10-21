@@ -17,7 +17,9 @@ pub fn clob_auth_signature(wallet: &signing::Wallet, ts: &str) -> Result<String>
         Token::Uint(U256::from(137u64)),
     ]));
     let message = keccak256(encode(&[
-        Token::FixedBytes(keccak256("ClobAuth(address address,string timestamp,uint256 nonce,string message)").to_vec()),
+        Token::FixedBytes(
+            keccak256("ClobAuth(address address,string timestamp,uint256 nonce,string message)").to_vec(),
+        ),
         Token::Address(wallet.address()),
         Token::FixedBytes(keccak256(ts).to_vec()),
         Token::Uint(U256::from(0u64)),
@@ -124,7 +126,12 @@ async fn answer(response: reqwest::Response) -> Result<std::result::Result<Value
         && serde_json::from_str::<Value>(&text)
             .is_ok_and(|answer| answer["error"].as_str() == Some("Could not derive api key!"));
     let body = text.chars().take(200).collect();
-    Ok(Err(AuthRefused { status: status.as_u16(), retry_after, body, no_key }))
+    Ok(Err(AuthRefused {
+        status: status.as_u16(),
+        retry_after,
+        body,
+        no_key,
+    }))
 }
 
 async fn create(request: reqwest::RequestBuilder) -> Result<Value> {
@@ -136,7 +143,12 @@ mod tests {
     use super::*;
     use serde_json::json;
     fn refused(status: u16, no_key: bool) -> AuthRefused {
-        AuthRefused { status, retry_after: None, body: String::new(), no_key }
+        AuthRefused {
+            status,
+            retry_after: None,
+            body: String::new(),
+            no_key,
+        }
     }
     /// Only the venue's exact "no key" answer creates keys: a 2xx answer
     /// without an `apiKey` refuses instead (it created new keys before).
@@ -145,7 +157,11 @@ mod tests {
         let key = json!({"apiKey": "k", "secret": "s", "passphrase": "p"});
         assert!(matches!(derived_key(Ok(key)).unwrap(), Derived::Key(answer) if answer["apiKey"] == "k"));
         assert!(matches!(derived_key(Err(refused(400, true))).unwrap(), Derived::NoKey));
-        for answer in [json!({}), json!({"api_key": "k", "secret": "s", "passphrase": "p"}), json!({"apiKey": 5})] {
+        for answer in [
+            json!({}),
+            json!({"api_key": "k", "secret": "s", "passphrase": "p"}),
+            json!({"apiKey": 5}),
+        ] {
             let error = derived_key(Ok(answer)).unwrap_err();
             assert!(error.to_string().contains("no new key is created"), "{error}");
         }

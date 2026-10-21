@@ -1,9 +1,9 @@
 //! Read-only decoding of V2 OrderFilled logs. Fees are actual collateral amounts,
 //! not estimates from legacy fee-rate fields. Network/finality checks are performed
 //! by the caller before installing decoded facts in the accounting journal.
+use crate::abi::U256;
 use crate::execution::Intent;
 use anyhow::{ensure, Context, Result};
-use crate::abi::U256;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -12,8 +12,7 @@ pub(crate) const EXCHANGES: [&str; 2] = [
     "0xe111180000d2663c0091e4f400237545b87b996b",
     "0xe2222d279d744050d28e00520010520000310f59",
 ];
-const EVENT: &str =
-    "OrderFilled(bytes32,address,address,uint8,uint256,uint256,uint256,uint256,bytes32,bytes32)";
+const EVENT: &str = "OrderFilled(bytes32,address,address,uint8,uint256,uint256,uint256,uint256,bytes32,bytes32)";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ReceiptFill {
@@ -35,15 +34,8 @@ impl ReceiptFill {
     }
 }
 
-pub fn decode_order_fills(
-    receipt: &Value,
-    wallet: &str,
-    owned: &BTreeMap<String, Intent>,
-) -> Result<Vec<ReceiptFill>> {
-    ensure!(
-        receipt["status"].as_str() == Some("0x1"),
-        "Transaction did not succeed"
-    );
+pub fn decode_order_fills(receipt: &Value, wallet: &str, owned: &BTreeMap<String, Intent>) -> Result<Vec<ReceiptFill>> {
+    ensure!(receipt["status"].as_str() == Some("0x1"), "Transaction did not succeed");
     let tx_hash = hash(&receipt["transactionHash"])?;
     let block_hash = hash(&receipt["blockHash"])?;
     let block_number = hex_u64(&receipt["blockNumber"])?;
@@ -61,15 +53,8 @@ pub fn decode_order_fills(
         if !EXCHANGES.contains(&address.as_str()) {
             continue;
         }
-        let topics = log["topics"]
-            .as_array()
-            .context("Malformed exchange log topics")?;
-        if topics
-            .first()
-            .and_then(|v| v.as_str())
-            .map(str::to_lowercase)
-            != Some(topic.clone())
-        {
+        let topics = log["topics"].as_array().context("Malformed exchange log topics")?;
+        if topics.first().and_then(|v| v.as_str()).map(str::to_lowercase) != Some(topic.clone()) {
             continue;
         }
         ensure!(
@@ -89,8 +74,7 @@ pub fn decode_order_fills(
             "Receipt/log identity mismatch"
         );
         ensure!(
-            hex_u64(&log["blockNumber"])? == block_number
-                && hex_u64(&log["transactionIndex"])? == transaction_index,
+            hex_u64(&log["blockNumber"])? == block_number && hex_u64(&log["transactionIndex"])? == transaction_index,
             "Receipt/log ordering mismatch"
         );
         let data = log["data"].as_str().context("Missing fill log data")?;
@@ -108,11 +92,7 @@ pub fn decode_order_fills(
         let making = small_units(words[2])?;
         let taking = small_units(words[3])?;
         let fee = small_units(words[4])?;
-        let (shares, cash) = if buy {
-            (taking, making)
-        } else {
-            (making, taking)
-        };
+        let (shares, cash) = if buy { (taking, making) } else { (making, taking) };
         ensure!(
             shares > 0 && cash > 0 && (buy || fee <= cash),
             "Invalid settled amounts"
@@ -157,7 +137,10 @@ pub fn untrusted_order_fills(receipt: &Value, owned: &BTreeMap<String, Intent>) 
             let address = log["address"].as_str()?.to_lowercase();
             let topics = log["topics"].as_array()?;
             let filled = topics.first().and_then(Value::as_str).map(str::to_lowercase) == Some(topic.clone());
-            let ours = topics.get(1).and_then(|id| hash(id).ok()).is_some_and(|id| owned.contains_key(&id));
+            let ours = topics
+                .get(1)
+                .and_then(|id| hash(id).ok())
+                .is_some_and(|id| owned.contains_key(&id));
             (filled && ours && !EXCHANGES.contains(&address.as_str())).then_some(address)
         })
         .collect();
@@ -171,7 +154,7 @@ pub fn untrusted_order_fills(receipt: &Value, owned: &BTreeMap<String, Intent>) 
 /// to whole units: a BUY at 0.73 settled 125186 shares for 91386
 /// units (exact 91385.78), 1.8e-6 above the limit as a price, which the old
 /// 1e-6 price tolerance refused. The limit's units are the signer's
-/// (PolymarketClient::validated_amounts rounds price × 1e6 the same way).
+/// (the order's amounts round price × 1e6 the same way).
 pub(crate) fn within_signed_limit(buy: bool, shares: u64, cash: u64, limit: f64) -> bool {
     // Only a price the signer signs, 1 to 999999 units (NaN fails both bounds).
     let units = (limit * 1e6).round();
@@ -188,10 +171,7 @@ pub(crate) fn within_signed_limit(buy: bool, shares: u64, cash: u64, limit: f64)
 }
 fn small_units(n: U256) -> Result<u64> {
     // Keep integer values exactly representable in the existing f64 projection.
-    ensure!(
-        n <= U256::from(1_u64 << 53),
-        "Amount exceeds exact accounting range"
-    );
+    ensure!(n <= U256::from(1_u64 << 53), "Amount exceeds exact accounting range");
     Ok(n.to::<u64>())
 }
 pub(crate) fn hash(value: &Value) -> Result<String> {
@@ -215,10 +195,7 @@ pub(crate) fn hex_u64(value: &Value) -> Result<u64> {
 
 /// Validate every log before attributing wallet movements across contract calls.
 pub fn validated_logs(receipt: &Value) -> Result<Vec<&Value>> {
-    ensure!(
-        receipt["status"].as_str() == Some("0x1"),
-        "Transaction did not succeed"
-    );
+    ensure!(receipt["status"].as_str() == Some("0x1"), "Transaction did not succeed");
     let transaction = hash(&receipt["transactionHash"])?;
     let block = hash(&receipt["blockHash"])?;
     let number = hex_u64(&receipt["blockNumber"])?;
@@ -254,26 +231,15 @@ pub(crate) fn test_receipt(wallet: &str, fill: &ReceiptFill) -> Value {
     let words = [
         if buy { U256::ZERO } else { U256::from(1u64) },
         crate::abi::u256_dec(&fill.token_id).unwrap(),
-        U256::from(if buy {
-            fill.cash_units
-        } else {
-            fill.shares_units
-        }),
-        U256::from(if buy {
-            fill.shares_units
-        } else {
-            fill.cash_units
-        }),
+        U256::from(if buy { fill.cash_units } else { fill.shares_units }),
+        U256::from(if buy { fill.shares_units } else { fill.cash_units }),
         U256::from(fill.fee_units),
         U256::ZERO,
         U256::ZERO,
     ];
     let data = format!(
         "0x{}",
-        words
-            .iter()
-            .map(|n| crate::abi::word_hex(*n))
-            .collect::<String>()
+        words.iter().map(|n| crate::abi::word_hex(*n)).collect::<String>()
     );
     let log = json!({"address": EXCHANGES[0], "topics": [format!("0x{}", hex::encode(crate::abi::keccak256(EVENT))),
         fill.order_id, format!("0x{:0>64}", wallet[2..].to_lowercase()), format!("0x{}", "00".repeat(32))],
@@ -309,17 +275,26 @@ mod tests {
             },
         )]);
         let mut receipt = test_receipt(&wallet, &fill);
-        assert!(untrusted_order_fills(&receipt, &owned).is_empty(), "a trusted exchange's log");
+        assert!(
+            untrusted_order_fills(&receipt, &owned).is_empty(),
+            "a trusted exchange's log"
+        );
         let untrusted = format!("0x{}", "9A".repeat(20));
         receipt["logs"][0]["address"] = json!(untrusted);
         assert_eq!(untrusted_order_fills(&receipt, &owned), vec![untrusted.to_lowercase()]);
         assert!(decode_order_fills(&receipt, &wallet, &owned).unwrap().is_empty());
         let mut other_order = receipt.clone();
         other_order["logs"][0]["topics"][1] = json!(format!("0x{:064x}", 5));
-        assert!(untrusted_order_fills(&other_order, &owned).is_empty(), "not an owned order");
+        assert!(
+            untrusted_order_fills(&other_order, &owned).is_empty(),
+            "not an owned order"
+        );
         let mut other_event = receipt.clone();
         other_event["logs"][0]["topics"][0] = json!(format!("0x{:064x}", 6));
-        assert!(untrusted_order_fills(&other_event, &owned).is_empty(), "not an OrderFilled log");
+        assert!(
+            untrusted_order_fills(&other_event, &owned).is_empty(),
+            "not an OrderFilled log"
+        );
         receipt["logs"] = json!([receipt["logs"][0].clone(), receipt["logs"][0].clone()]);
         assert_eq!(untrusted_order_fills(&receipt, &owned).len(), 1, "each contract once");
     }
@@ -409,13 +384,7 @@ mod tests {
                 0,
                 0,
             ];
-            let data = format!(
-                "0x{}",
-                words
-                    .iter()
-                    .map(|n| format!("{n:064x}"))
-                    .collect::<String>()
-            );
+            let data = format!("0x{}", words.iter().map(|n| format!("{n:064x}")).collect::<String>());
             let log = json!({"address":EXCHANGES[0],"topics":[format!("0x{}",hex::encode(crate::abi::keccak256(EVENT))),
                 id,format!("0x{:0>64}",&wallet[2..]),format!("0x{}","00".repeat(32))],"data":data,
                 "transactionHash":tx,"blockHash":block,"blockNumber":"0xa","transactionIndex":"0x1","logIndex":"0x7","removed":false});

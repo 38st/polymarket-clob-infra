@@ -20,7 +20,7 @@ pub struct ExecutionFill {
     pub matched_at_ms: u64,
     /// The venue's trade status, or VOID: reported FAILED and decided at a
     /// restart, its one settlement transaction reverted and nothing of it in
-    /// the wallet (PolymarketClient::recover_at_startup). A void execution
+    /// the wallet (decided by start-up recovery). A void execution
     /// moved nothing: no shares, no cost, no P&L.
     pub status: String,
     /// Cash fees increase BUY basis or reduce SELL proceeds.
@@ -49,11 +49,7 @@ impl ExecutionFill {
             "Invalid execution action"
         );
         ensure!(
-            self.size.is_finite()
-                && self.size > 0.0
-                && self.price.is_finite()
-                && self.price > 0.0
-                && self.price < 1.0,
+            self.size.is_finite() && self.size > 0.0 && self.price.is_finite() && self.price > 0.0 && self.price < 1.0,
             "Invalid execution amounts"
         );
         ensure!(self.matched_at_ms > 0, "Missing execution time");
@@ -171,13 +167,14 @@ impl Resolution {
             "Invalid resolution chain identity"
         );
         ensure!(
-            self.tokens.iter().all(|t| !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit()))
+            self.tokens
+                .iter()
+                .all(|t| !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit()))
                 && self.tokens[0] != self.tokens[1],
             "Invalid resolution outcome tokens"
         );
         ensure!(
-            self.denominator > 0
-                && self.numerators[0].checked_add(self.numerators[1]) == Some(self.denominator),
+            self.denominator > 0 && self.numerators[0].checked_add(self.numerators[1]) == Some(self.denominator),
             "Invalid resolution payout vector"
         );
         ensure!(
@@ -194,7 +191,7 @@ impl Resolution {
 /// change. Copying a ledger therefore copies none of its maps, and a change
 /// copies only the maps it touches: the maps it did not touch are still the
 /// very ones its original holds (Shared::same), which is how
-/// ExecutionJournal::commit_ledger diffs only the touched maps. It encodes,
+/// a journal can persist only the touched maps. It encodes,
 /// compares and prints as the value itself.
 #[derive(Default)]
 pub struct Shared<T>(std::sync::Arc<T>);
@@ -304,7 +301,7 @@ pub struct AccountingLedger {
     pub archive: Option<ArchiveBase>,
     /// FAILED reports that named no recorded execution, by trade ID, with
     /// every settlement transaction they named: the execution, once recorded,
-    /// is FAILED with them (ExecutionJournal::record_event); until then a
+    /// is FAILED with them once recorded; until then a
     /// restart refuses to start.
     #[serde(default, skip_serializing_if = "is_empty_map")]
     pub failed_notices: Shared<BTreeMap<String, BTreeSet<String>>>,
@@ -420,10 +417,7 @@ impl AccountingLedger {
     pub fn install_block_time(&mut self, hash: &str, timestamp: u64) -> Result<bool> {
         ensure!(timestamp > 0, "Missing finalized block timestamp");
         if let Some(prior) = self.block_times_ms.get(hash) {
-            ensure!(
-                *prior == timestamp,
-                "Conflicting finalized block timestamps"
-            );
+            ensure!(*prior == timestamp, "Conflicting finalized block timestamps");
             return Ok(false);
         }
         self.block_times_ms.insert(hash.to_owned(), timestamp);
@@ -451,7 +445,10 @@ impl AccountingLedger {
             .collect();
         let (mut groups, mut orders) = (BTreeSet::new(), BTreeSet::new());
         for fill in self.fills.values() {
-            let group = fill.transaction_hash.as_ref().map(|tx| (tx.clone(), fill.order_id.clone()));
+            let group = fill
+                .transaction_hash
+                .as_ref()
+                .map(|tx| (tx.clone(), fill.order_id.clone()));
             match fill.status.as_str() {
                 "CONFIRMED" => {
                     if let Some(group) = group {
@@ -533,7 +530,9 @@ impl AccountingLedger {
 
     /// Whether any fill is not yet confirmed on chain (a void one never is).
     pub fn has_settling(&self) -> bool {
-        self.fills.values().any(|fill| !matches!(fill.status.as_str(), "CONFIRMED" | "VOID"))
+        self.fills
+            .values()
+            .any(|fill| !matches!(fill.status.as_str(), "CONFIRMED" | "VOID"))
     }
 
     pub fn pending_evidence(&self) -> Result<std::collections::BTreeSet<String>> {
@@ -548,17 +547,11 @@ impl AccountingLedger {
     }
 
     pub fn realizations(&self) -> Result<Vec<Realization>> {
-        ensure!(
-            self.require_receipts,
-            "Realized reporting requires receipts"
-        );
+        ensure!(self.require_receipts, "Realized reporting requires receipts");
         Ok(self.receipt_projection()?.1)
     }
 
-    pub fn install_receipt_fills(
-        &mut self,
-        fills: &[crate::receipts::ReceiptFill],
-    ) -> Result<bool> {
+    pub fn install_receipt_fills(&mut self, fills: &[crate::receipts::ReceiptFill]) -> Result<bool> {
         // Validate the whole batch before changing memory or writing a checkpoint.
         let mut next = self.receipt_fills.clone();
         let mut changed = false;
@@ -577,10 +570,7 @@ impl AccountingLedger {
     pub fn pending_receipts(&self) -> Result<std::collections::BTreeSet<String>> {
         let mut result = std::collections::BTreeSet::new();
         for fill in self.fills.values().filter(|fill| fill.status != "VOID") {
-            ensure!(
-                fill.status == "CONFIRMED",
-                "Execution is awaiting final confirmation"
-            );
+            ensure!(fill.status == "CONFIRMED", "Execution is awaiting final confirmation");
             let tx = fill
                 .transaction_hash
                 .as_ref()
@@ -617,10 +607,7 @@ impl AccountingLedger {
         let mut executions: BTreeMap<Group, Vec<&ExecutionFill>> = BTreeMap::new();
         for fill in self.fills.values().filter(|fill| fill.status != "VOID") {
             fill.validate()?;
-            ensure!(
-                fill.status == "CONFIRMED",
-                "Unconfirmed execution needs reconciliation"
-            );
+            ensure!(fill.status == "CONFIRMED", "Unconfirmed execution needs reconciliation");
             let tx = fill
                 .transaction_hash
                 .as_ref()
@@ -638,13 +625,8 @@ impl AccountingLedger {
                 receipt.transaction_index,
                 receipt.block_hash.clone(),
             );
-            if let Some(prior) =
-                transaction_blocks.insert(receipt.transaction_hash.clone(), identity.clone())
-            {
-                ensure!(
-                    prior == identity,
-                    "One transaction has conflicting chain positions"
-                );
+            if let Some(prior) = transaction_blocks.insert(receipt.transaction_hash.clone(), identity.clone()) {
+                ensure!(prior == identity, "One transaction has conflicting chain positions");
             }
             let group = settled
                 .entry((receipt.transaction_hash.clone(), receipt.order_id.clone()))
@@ -662,10 +644,7 @@ impl AccountingLedger {
                 "Duplicated chain log position"
             );
             if let Some(hash) = block_hashes.insert(receipt.block_number, &receipt.block_hash) {
-                ensure!(
-                    hash == &receipt.block_hash,
-                    "Conflicting canonical block evidence"
-                );
+                ensure!(hash == &receipt.block_hash, "Conflicting canonical block evidence");
             }
             // Every execution has its transaction here (checked above).
             let key = (receipt.transaction_hash.clone(), receipt.order_id.clone());
@@ -683,9 +662,7 @@ impl AccountingLedger {
             "Trade replay and receipt coverage differ"
         );
         for (key, fills) in &executions {
-            let (shares, collateral) = settled
-                .get(key)
-                .context("Missing finalized execution receipt")?;
+            let (shares, collateral) = settled.get(key).context("Missing finalized execution receipt")?;
             ensure!(
                 reports_settle_as_receipts(fills, *shares, *collateral),
                 "Exchange and receipt execution amounts differ"
@@ -710,29 +687,17 @@ impl AccountingLedger {
         }
         for s in self.settlements.values() {
             s.validate()?;
-            let position = s
-                .chain_order
-                .context("Settlement lacks verified chain ordering")?;
+            let position = s.chain_order.context("Settlement lacks verified chain ordering")?;
             ensure!(
-                chain_slots.insert((
-                    position.block_number,
-                    position.log_index,
-                    position.event_index
-                )),
+                chain_slots.insert((position.block_number, position.log_index, position.event_index)),
                 "Duplicated settlement log position"
             );
             let block_hash = s
                 .block_hash
                 .as_ref()
                 .context("Settlement lacks canonical block evidence")?;
-            let identity = (
-                position.block_number,
-                position.transaction_index,
-                block_hash.clone(),
-            );
-            if let Some(prior) =
-                transaction_blocks.insert(s.transaction_hash.clone(), identity.clone())
-            {
+            let identity = (position.block_number, position.transaction_index, block_hash.clone());
+            if let Some(prior) = transaction_blocks.insert(s.transaction_hash.clone(), identity.clone()) {
                 ensure!(
                     prior == identity,
                     "Settlement transaction has conflicting chain positions"
@@ -745,12 +710,8 @@ impl AccountingLedger {
         }
         for resolution in self.resolutions.values() {
             resolution.validate()?;
-            if let Some(hash) = block_hashes.insert(resolution.block_number, &resolution.block_hash)
-            {
-                ensure!(
-                    hash == &resolution.block_hash,
-                    "Conflicting resolution block evidence"
-                );
+            if let Some(hash) = block_hashes.insert(resolution.block_number, &resolution.block_hash) {
+                ensure!(hash == &resolution.block_hash, "Conflicting resolution block evidence");
             }
             // Payouts are reported by a transaction inside this block. Fills
             // and redemptions in the same block are ordered before it; only a
@@ -835,8 +796,7 @@ impl AccountingLedger {
                         }
                         // Rebase to the payout value; a later redemption of this
                         // inventory then realizes (almost exactly) nothing.
-                        let value =
-                            p.quantity * r.numerators[outcome] as f64 / r.denominator as f64;
+                        let value = p.quantity * r.numerators[outcome] as f64 / r.denominator as f64;
                         let basis = p.cost_basis;
                         p.realized_pnl += value - basis;
                         p.cost_basis = value;
@@ -892,9 +852,10 @@ impl AccountingLedger {
                     } else {
                         ensure!(
                             prior.status != "CONFIRMED"
-                                && !self.receipt_fills.values().any(
-                                    |r| &r.transaction_hash == a && r.order_id == fill.order_id
-                                ),
+                                && !self
+                                    .receipt_fills
+                                    .values()
+                                    .any(|r| &r.transaction_hash == a && r.order_id == fill.order_id),
                             "Final execution changed its settlement transaction"
                         );
                         others.push(a.clone());
@@ -1001,8 +962,7 @@ impl AccountingLedger {
             ensure!(prior == &settlement, "Conflicting settlement evidence");
             return Ok(false);
         }
-        self.settlements
-            .insert(settlement.event_id.clone(), settlement);
+        self.settlements.insert(settlement.event_id.clone(), settlement);
         Ok(true)
     }
 
@@ -1029,8 +989,7 @@ impl AccountingLedger {
                 "Token resolved under two conditions"
             );
         }
-        self.resolutions
-            .insert(resolution.condition_id.clone(), resolution);
+        self.resolutions.insert(resolution.condition_id.clone(), resolution);
         Ok(true)
     }
 
@@ -1065,10 +1024,7 @@ impl AccountingLedger {
     /// return it with its totals; `self` keeps everything else. Resolution
     /// records are copied into the archive and stay live while a live token
     /// still needs them.
-    pub fn split_archive(
-        &mut self,
-        tokens: &BTreeSet<String>,
-    ) -> Result<(AccountingLedger, ArchiveSummary)> {
+    pub fn split_archive(&mut self, tokens: &BTreeSet<String>) -> Result<(AccountingLedger, ArchiveSummary)> {
         let mut archived = AccountingLedger {
             require_receipts: true,
             ..Default::default()
@@ -1112,13 +1068,10 @@ impl AccountingLedger {
         self.resolutions = kept.into();
         for receipt in archived.receipt_fills.values() {
             if let Some(time) = self.block_times_ms.get(&receipt.block_hash) {
-                archived
-                    .block_times_ms
-                    .insert(receipt.block_hash.clone(), *time);
+                archived.block_times_ms.insert(receipt.block_hash.clone(), *time);
             }
         }
-        let referenced: BTreeSet<&String> =
-            self.receipt_fills.values().map(|r| &r.block_hash).collect();
+        let referenced: BTreeSet<&String> = self.receipt_fills.values().map(|r| &r.block_hash).collect();
         self.block_times_ms
             .retain(|hash, _| referenced.contains(hash) || !archived.block_times_ms.contains_key(hash));
         let summary = archived.summarize()?;
@@ -1131,9 +1084,7 @@ impl AccountingLedger {
         Ok(portfolio
             .positions
             .iter()
-            .filter(|(token, p)| {
-                p.quantity > 1e-9 && !self.resolutions.values().any(|r| r.tokens.contains(*token))
-            })
+            .filter(|(token, p)| p.quantity > 1e-9 && !self.resolutions.values().any(|r| r.tokens.contains(*token)))
             .filter_map(|(token, _)| {
                 self.condition_claims
                     .get(token)
@@ -1150,10 +1101,7 @@ impl AccountingLedger {
         }
         #[cfg(test)]
         count_projection();
-        ensure!(
-            self.archive.is_none(),
-            "Archived history requires receipt accounting"
-        );
+        ensure!(self.archive.is_none(), "Archived history requires receipt accounting");
         enum Event<'a> {
             Fill(&'a ExecutionFill),
             Settlement(&'a Settlement),
@@ -1180,9 +1128,7 @@ impl AccountingLedger {
         let mut actions_at_time = BTreeMap::new();
         for (time, _, event) in &events {
             if let Event::Fill(fill) = event {
-                if let Some(prior) =
-                    actions_at_time.insert((*time, fill.token_id.as_str()), fill.action.as_str())
-                {
+                if let Some(prior) = actions_at_time.insert((*time, fill.token_id.as_str()), fill.action.as_str()) {
                     ensure!(
                         prior == fill.action,
                         "Execution order is ambiguous; transaction ordering required"
@@ -1197,10 +1143,7 @@ impl AccountingLedger {
                     let fee_cash = fill.fee_cash.context("Cash fee is unknown")?;
                     let fee_shares = fill.fee_shares.context("Share fee is unknown")?;
                     ensure!(fill.fee_evidence.is_some(), "Fee evidence is missing");
-                    let p = portfolio
-                        .positions
-                        .entry(fill.token_id.clone())
-                        .or_default();
+                    let p = portfolio.positions.entry(fill.token_id.clone()).or_default();
                     p.fees_cash += fee_cash;
                     p.fees_shares += fee_shares;
                     if fill.action == "BUY" {
@@ -1264,8 +1207,7 @@ fn reports_settle_as_receipts(fills: &[&ExecutionFill], shares: u64, cash: u64) 
         reported_cash += fill.size * fill.price * 1e6;
     }
     let reports = fills.len() as f64;
-    within_units(reported_shares, shares, 1., reports)
-        && within_units(reported_cash, cash, reports, reports)
+    within_units(reported_shares, shares, 1., reports) && within_units(reported_cash, cash, reports, reports)
 }
 /// Whether `reported`, the f64 sum of `reports` venue amounts in units, is
 /// within `allowed` units of the receipts' exact `settled` units. Its floats
@@ -1307,8 +1249,7 @@ mod tests {
     }
     /// A ledger with shared maps (Shared) reads and writes exactly the JSON
     /// of the plain maps it replaced, empty kept-report maps left out as
-    /// before: the journal, its log records and the Python executor's reader
-    /// see no difference. The old definition is spelled out here.
+    /// before: any reader of the stored JSON sees no difference. The old definition is spelled out here.
     #[test]
     fn a_ledger_of_shared_maps_encodes_as_the_plain_maps_did() {
         #[derive(Serialize, Deserialize)]
@@ -1334,10 +1275,15 @@ mod tests {
             #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
             unrecorded_reports: BTreeMap<String, BTreeSet<String>>,
         }
-        let mut ledger = AccountingLedger { require_receipts: true, ..Default::default() };
+        let mut ledger = AccountingLedger {
+            require_receipts: true,
+            ..Default::default()
+        };
         let buy = fill("buy", "BUY", 10.0, 0.4, 1);
         ledger.record_fill(buy).unwrap();
-        ledger.install_receipt_fills(&[receipt_tests::receipt("BUY", 1)]).unwrap();
+        ledger
+            .install_receipt_fills(&[receipt_tests::receipt("BUY", 1)])
+            .unwrap();
         ledger.install_block_time(&format!("0x{}", "ab".repeat(32)), 7).unwrap();
         ledger.record_condition_claim("123", &format!("0x{}", "cd".repeat(32)));
         for kept in [false, true] {
@@ -1360,14 +1306,10 @@ mod tests {
     fn reordered_partial_sells_keep_basis_and_realized_pnl_exactly_once() {
         let mut ledger = AccountingLedger::default();
         let buy = fill("buy", "BUY", 10.0, 0.4, 1);
-        ledger
-            .record_fill(fill("sell2", "SELL", 2.0, 0.3, 3))
-            .unwrap();
+        ledger.record_fill(fill("sell2", "SELL", 2.0, 0.3, 3)).unwrap();
         ledger.record_fill(buy.clone()).unwrap();
         assert!(!ledger.record_fill(buy).unwrap());
-        ledger
-            .record_fill(fill("sell1", "SELL", 2.0, 0.6, 2))
-            .unwrap();
+        ledger.record_fill(fill("sell1", "SELL", 2.0, 0.6, 2)).unwrap();
         let portfolio = ledger.portfolio().unwrap();
         let p = &portfolio.positions["123"];
         assert_eq!(p.quantity, 6.0);
@@ -1423,7 +1365,6 @@ mod tests {
         ledger.record_fill(fill("b", "SELL", 11.0, 0.5, 2)).unwrap();
         assert!(ledger.portfolio().is_err());
     }
-
 }
 
 #[cfg(test)]
@@ -1498,7 +1439,10 @@ pub(crate) mod receipt_tests {
         ledger.record_fill(other).unwrap();
         ledger.install_receipt_fills(std::slice::from_ref(&buy)).unwrap();
         let error = ledger.receipt_projection().unwrap_err();
-        assert!(error.to_string().contains("Execution/receipt identity mismatch"), "{error:#}");
+        assert!(
+            error.to_string().contains("Execution/receipt identity mismatch"),
+            "{error:#}"
+        );
     }
     /// A (transaction, order)'s venue reports and its receipts compare in
     /// whole units: the reported shares within one unit, the reported cash
@@ -1580,8 +1524,16 @@ pub(crate) mod receipt_tests {
         assert!(!projects(&[(1e6, 0.73)], 1_000_000_000_000, 730_000_000_002));
         // The rounding bound there is 2.7e-3 units: a share gap of 1.002
         // units passes, one of 1.004 is refused.
-        assert!(projects(&[(1_000_000.000_001_002, 0.5)], 1_000_000_000_000, 500_000_000_000));
-        assert!(!projects(&[(1_000_000.000_001_004, 0.5)], 1_000_000_000_000, 500_000_000_000));
+        assert!(projects(
+            &[(1_000_000.000_001_002, 0.5)],
+            1_000_000_000_000,
+            500_000_000_000
+        ));
+        assert!(!projects(
+            &[(1_000_000.000_001_004, 0.5)],
+            1_000_000_000_000,
+            500_000_000_000
+        ));
         // The bound reaches a hundredth of a unit between 3.5 million shares
         // in one report (9.3e-3) and 4 million (1.07e-2), and at three
         // reports of a million (1.07e-2); there even an exact match is refused.
@@ -1602,9 +1554,7 @@ pub(crate) mod receipt_tests {
         };
         let buy = receipt("BUY", 1); // 4 shares, $1.60 + $0.10 fee
         ledger.record_fill(trade("buy", &buy, 4.)).unwrap();
-        ledger
-            .install_receipt_fills(std::slice::from_ref(&buy))
-            .unwrap();
+        ledger.install_receipt_fills(std::slice::from_ref(&buy)).unwrap();
         let day = 20 * 86_400_000;
         ledger.install_block_time(&buy.block_hash, day + 1).unwrap();
         assert!(ledger.realizations().unwrap().is_empty());
@@ -1663,8 +1613,7 @@ pub(crate) mod receipt_tests {
                 confirmed_at_ms: day + 86_400_000,
             })
             .unwrap();
-        let reopened: AccountingLedger =
-            serde_json::from_slice(&serde_json::to_vec(&ledger).unwrap()).unwrap();
+        let reopened: AccountingLedger = serde_json::from_slice(&serde_json::to_vec(&ledger).unwrap()).unwrap();
         let events = reopened.realizations().unwrap();
         assert_eq!(events.len(), 2);
         assert_eq!(events[1].kind, "settlement");
@@ -1695,9 +1644,7 @@ pub(crate) mod receipt_tests {
         ledger.record_fill(trade("buy-1", &buy, 2.)).unwrap();
         ledger.record_fill(trade("buy-2", &buy, 2.)).unwrap();
         ledger.record_fill(trade("sell", &sell, 2.)).unwrap();
-        ledger
-            .install_receipt_fills(&[sell.clone(), buy.clone()])
-            .unwrap();
+        ledger.install_receipt_fills(&[sell.clone(), buy.clone()]).unwrap();
         assert_eq!(ledger.pending_evidence().unwrap().len(), 2); // old journals backfill dates
         let day = 20 * 86_400_000;
         assert!(ledger.install_block_time(&buy.block_hash, day + 1).unwrap());
@@ -1729,8 +1676,7 @@ pub(crate) mod receipt_tests {
                 confirmed_at_ms: day + 86_400_000,
             })
             .unwrap();
-        let reopened: AccountingLedger =
-            serde_json::from_slice(&serde_json::to_vec(&ledger).unwrap()).unwrap();
+        let reopened: AccountingLedger = serde_json::from_slice(&serde_json::to_vec(&ledger).unwrap()).unwrap();
         let events = reopened.realizations().unwrap();
         assert_eq!(events.len(), 2);
         assert!(
@@ -1788,7 +1734,9 @@ pub(crate) mod receipt_tests {
             ..Default::default()
         };
         let settled = receipt("BUY", 1);
-        ledger.install_block_time(&settled.block_hash, 1_700_000_000_000).unwrap(); // every fixture block
+        ledger
+            .install_block_time(&settled.block_hash, 1_700_000_000_000)
+            .unwrap(); // every fixture block
         ledger.record_fill(trade("settled", &settled, 4.)).unwrap();
         ledger.install_receipt_fills(std::slice::from_ref(&settled)).unwrap();
         assert_eq!(ledger.portfolio().unwrap().positions["123"].quantity, 4.);
@@ -1809,10 +1757,19 @@ pub(crate) mod receipt_tests {
         let mut late = trade("unread", &unread, 4.);
         late.status = "CONFIRMED".into();
         ledger.record_fill(late).unwrap();
-        assert_eq!(ledger.settled_view().unwrap().portfolio().unwrap().positions["123"].quantity, 4.);
-        assert_eq!(ledger.settled_pending_evidence().unwrap(), [unread.transaction_hash.clone()].into());
+        assert_eq!(
+            ledger.settled_view().unwrap().portfolio().unwrap().positions["123"].quantity,
+            4.
+        );
+        assert_eq!(
+            ledger.settled_pending_evidence().unwrap(),
+            [unread.transaction_hash.clone()].into()
+        );
         ledger.install_receipt_fills(std::slice::from_ref(&unread)).unwrap();
-        assert_eq!(ledger.settled_view().unwrap().portfolio().unwrap().positions["123"].quantity, 8.);
+        assert_eq!(
+            ledger.settled_view().unwrap().portfolio().unwrap().positions["123"].quantity,
+            8.
+        );
         // Two trades of one (transaction, order), one confirmed and one mined:
         // the whole group waits, so the view stays consistent.
         let shared = receipt("BUY", 4);
@@ -1822,12 +1779,18 @@ pub(crate) mod receipt_tests {
         ledger.record_fill(first.clone()).unwrap();
         ledger.record_fill(second.clone()).unwrap();
         ledger.install_receipt_fills(std::slice::from_ref(&shared)).unwrap();
-        assert_eq!(ledger.settled_view().unwrap().portfolio().unwrap().positions["123"].quantity, 8.);
+        assert_eq!(
+            ledger.settled_view().unwrap().portfolio().unwrap().positions["123"].quantity,
+            8.
+        );
         second.status = "CONFIRMED".into();
         ledger.record_fill(second).unwrap();
         first.status = "CONFIRMED".into();
         ledger.record_fill(first).unwrap();
-        assert_eq!(ledger.settled_view().unwrap().portfolio().unwrap().positions["123"].quantity, 12.);
+        assert_eq!(
+            ledger.settled_view().unwrap().portfolio().unwrap().positions["123"].quantity,
+            12.
+        );
         // A settling trade without a transaction yet may share a confirmed
         // sibling's receipt: that order waits as a whole.
         let aggregate = receipt("BUY", 5); // 4 shares for two 2-share trades
@@ -1838,11 +1801,17 @@ pub(crate) mod receipt_tests {
         ledger.record_fill(confirmed_half).unwrap();
         ledger.record_fill(unknown_half.clone()).unwrap();
         ledger.install_receipt_fills(std::slice::from_ref(&aggregate)).unwrap();
-        assert_eq!(ledger.settled_view().unwrap().portfolio().unwrap().positions["123"].quantity, 12.);
+        assert_eq!(
+            ledger.settled_view().unwrap().portfolio().unwrap().positions["123"].quantity,
+            12.
+        );
         unknown_half.transaction_hash = Some(aggregate.transaction_hash.clone());
         unknown_half.status = "CONFIRMED".into();
         ledger.record_fill(unknown_half).unwrap();
-        assert_eq!(ledger.settled_view().unwrap().portfolio().unwrap().positions["123"].quantity, 16.);
+        assert_eq!(
+            ledger.settled_view().unwrap().portfolio().unwrap().positions["123"].quantity,
+            16.
+        );
         // Reported RETRYING in a transaction whose receipt of its order is
         // read: the venue and the chain disagree, so it needs reconciliation
         // (a_retrying_fill_waits_with_its_transaction_and_its_orders_losses_stay).
@@ -1851,7 +1820,10 @@ pub(crate) mod receipt_tests {
         assert!(ledger.settled_view().is_err());
         fill.status = "CONFIRMED".into();
         ledger.record_fill(fill).unwrap();
-        assert_eq!(ledger.settled_view().unwrap().portfolio().unwrap().positions["123"].quantity, 20.);
+        assert_eq!(
+            ledger.settled_view().unwrap().portfolio().unwrap().positions["123"].quantity,
+            20.
+        );
         // A failed settlement still needs reconciliation.
         let mut failed = trade("failed", &receipt("BUY", 6), 4.);
         failed.status = "FAILED".into();
@@ -1860,7 +1832,7 @@ pub(crate) mod receipt_tests {
         assert!(ledger.settled_pending_evidence().is_err());
     }
 
-    /// A RETRYING fill stopped every publication: the settled view refused
+    /// A RETRYING fill must not block the settled view: it used to refuse
     /// it as it refuses a FAILED one, although it is only unsettled (its
     /// settlement transaction failed and the venue settles it again). It waits
     /// with the transaction it names: the order's other, verified fills stay in
@@ -1924,13 +1896,19 @@ pub(crate) mod receipt_tests {
         late.status = "RETRYING".into();
         batched.record_fill(late.clone()).unwrap();
         batched.record_fill(trade("sibling", &retry, 2.)).unwrap();
-        assert_eq!(batched.settled_pending_evidence().unwrap(), [retry.transaction_hash.clone()].into());
+        assert_eq!(
+            batched.settled_pending_evidence().unwrap(),
+            [retry.transaction_hash.clone()].into()
+        );
         batched.install_receipt_fills(std::slice::from_ref(&retry)).unwrap();
         assert!(batched.settled_view().unwrap().portfolio().is_err());
         late.transaction_hash = Some(retry.transaction_hash.clone());
         late.status = "CONFIRMED".into();
         batched.record_fill(late).unwrap();
-        assert_eq!(batched.settled_view().unwrap().portfolio().unwrap().positions["123"].quantity, 4.);
+        assert_eq!(
+            batched.settled_view().unwrap().portfolio().unwrap().positions["123"].quantity,
+            4.
+        );
         assert_eq!(batched.portfolio().unwrap().positions["123"].quantity, 4.);
 
         // Named for a transaction that settled its order (a receipt of the
@@ -1967,9 +1945,7 @@ pub(crate) mod receipt_tests {
         ledger.record_fill(trade("z-buy-2", &buy, 2.)).unwrap();
         assert!(ledger.portfolio().is_err());
         assert_eq!(ledger.pending_receipts().unwrap().len(), 2);
-        assert!(ledger
-            .install_receipt_fills(&[sell.clone(), buy.clone()])
-            .unwrap());
+        assert!(ledger.install_receipt_fills(&[sell.clone(), buy.clone()]).unwrap());
         assert!(!ledger.install_receipt_fills(std::slice::from_ref(&buy)).unwrap());
         assert!(ledger.pending_receipts().unwrap().is_empty());
         let p = ledger.portfolio().unwrap();

@@ -413,7 +413,9 @@ impl MarketMerge {
             None | Some(Line::Failed) => Step::Ignored,
             Some(Line::Waiting { items, .. }) | Some(Line::Pending { items, .. }) => {
                 if items.len() >= MAX_HELD {
-                    tracing::warn!("Market feed: connection {conn} held {MAX_HELD} events without lining up; out of line");
+                    tracing::warn!(
+                        "Market feed: connection {conn} held {MAX_HELD} events without lining up; out of line"
+                    );
                     self.lines.insert(conn, Line::Failed);
                     return Step::Failed;
                 }
@@ -505,7 +507,9 @@ impl MarketMerge {
             if !held.iter().any(|(k, _)| *k == key) {
                 if held.len() >= MAX_HELD {
                     // As for book events: out of line rather than missing prints later.
-                    tracing::warn!("Market feed: connection {conn} held {MAX_HELD} prints without lining up; out of line");
+                    tracing::warn!(
+                        "Market feed: connection {conn} held {MAX_HELD} prints without lining up; out of line"
+                    );
                     self.held_prints.remove(&conn);
                     self.lines.insert(conn, Line::Failed);
                     return Step::Failed;
@@ -562,12 +566,7 @@ impl MarketMerge {
             }
             Some(count)
         };
-        let from_first = self
-            .positions
-            .get(&first)
-            .into_iter()
-            .flatten()
-            .map(|&p| (0, p));
+        let from_first = self.positions.get(&first).into_iter().flatten().map(|&p| (0, p));
         let from_log_start = held
             .iter()
             .enumerate()
@@ -617,7 +616,13 @@ impl MarketMerge {
                 snapshot: false,
             });
         }
-        self.lines.insert(conn, Line::InLine { next, due: [false, false] });
+        self.lines.insert(
+            conn,
+            Line::InLine {
+                next,
+                due: [false, false],
+            },
+        );
         out.extend(self.release_prints(conn));
         out
     }
@@ -790,7 +795,13 @@ impl MarketMerge {
                             self.try_align(conn, now, true)
                         } else {
                             let next = self.end();
-                            self.lines.insert(conn, Line::InLine { next, due: [false, false] });
+                            self.lines.insert(
+                                conn,
+                                Line::InLine {
+                                    next,
+                                    due: [false, false],
+                                },
+                            );
                             self.release_prints(conn)
                         };
                         if !released.is_empty() {
@@ -930,8 +941,23 @@ mod tests {
 
     fn random_text(rng: &mut rand::rngs::StdRng) -> String {
         use rand::Rng;
-        const PIECES: [&str; 12] = ["a", "Z", "0", ".", "\"", "\\", "\n", "\u{0}", "é", "€", "\u{10FFFF}", "price"];
-        (0..rng.random_range(0..12)).map(|_| PIECES[rng.random_range(0..PIECES.len())]).collect()
+        const PIECES: [&str; 12] = [
+            "a",
+            "Z",
+            "0",
+            ".",
+            "\"",
+            "\\",
+            "\n",
+            "\u{0}",
+            "é",
+            "€",
+            "\u{10FFFF}",
+            "price",
+        ];
+        (0..rng.random_range(0..12))
+            .map(|_| PIECES[rng.random_range(0..PIECES.len())])
+            .collect()
     }
 
     fn random_value(rng: &mut rand::rngs::StdRng, depth: u32) -> Value {
@@ -942,12 +968,22 @@ mod tests {
             2 => json!(rng.random::<u64>() >> rng.random_range(0..64)),
             3 => json!(-((rng.random::<u64>() >> rng.random_range(1..64)) as i64) - 1),
             4 => {
-                let f = rng.random::<f64>() * 10f64.powi(rng.random_range(-12..300)) * if rng.random() { 1.0 } else { -1.0 };
+                let f = rng.random::<f64>()
+                    * 10f64.powi(rng.random_range(-12..300))
+                    * if rng.random() { 1.0 } else { -1.0 };
                 json!(f)
             }
             5 => Value::String(random_text(rng)),
-            6 => Value::Array((0..rng.random_range(0..5)).map(|_| random_value(rng, depth - 1)).collect()),
-            _ => Value::Object((0..rng.random_range(0..6)).map(|_| (random_text(rng), random_value(rng, depth - 1))).collect()),
+            6 => Value::Array(
+                (0..rng.random_range(0..5))
+                    .map(|_| random_value(rng, depth - 1))
+                    .collect(),
+            ),
+            _ => Value::Object(
+                (0..rng.random_range(0..6))
+                    .map(|_| (random_text(rng), random_value(rng, depth - 1)))
+                    .collect(),
+            ),
         }
     }
 
@@ -960,9 +996,25 @@ mod tests {
             assert_eq!(EventKey::of(&v), reference_key(&v), "{v}");
         }
         let edges = [
-            json!(null), json!(true), json!(false), json!(0), json!(-0.0), json!(0.0), json!(u64::MAX), json!(i64::MIN),
-            json!(1e300), json!(-1e-300), json!(0.1), json!(1.0), json!(""), json!([]), json!({}), json!([[]]), json!({"": ""}),
-            json!({"a": [1, {"b": null, "a": "x"}], "A": -1}), json!("\u{0}\u{7f}\u{80}\u{7ff}\u{800}\u{ffff}\u{10000}"),
+            json!(null),
+            json!(true),
+            json!(false),
+            json!(0),
+            json!(-0.0),
+            json!(0.0),
+            json!(u64::MAX),
+            json!(i64::MIN),
+            json!(1e300),
+            json!(-1e-300),
+            json!(0.1),
+            json!(1.0),
+            json!(""),
+            json!([]),
+            json!({}),
+            json!([[]]),
+            json!({"": ""}),
+            json!({"a": [1, {"b": null, "a": "x"}], "A": -1}),
+            json!("\u{0}\u{7f}\u{80}\u{7ff}\u{800}\u{ffff}\u{10000}"),
             serde_json::from_str::<Value>("[1, 1.0, -1, -1.0, 1e2, 100, 12345678901234567890, -0]").unwrap(),
         ];
         for v in edges {
@@ -1070,7 +1122,10 @@ mod tests {
         assert!(!m.in_line(2));
         // 1 delivers 6: 2's held 3-6 match in a run of four; its 7 and 8 are
         // released at once, after 6.
-        assert_eq!(msgs(deliver(&mut m, 1, 6, now)), vec![(1, ev(6)), (2, ev(7)), (2, ev(8))]);
+        assert_eq!(
+            msgs(deliver(&mut m, 1, 6, now)),
+            vec![(1, ev(6)), (2, ev(7)), (2, ev(8))]
+        );
         assert!(m.in_line(2));
         assert_eq!(deliver(&mut m, 1, 7, now), Step::Duplicate);
         assert_eq!(deliver(&mut m, 1, 8, now), Step::Duplicate);
@@ -1190,7 +1245,10 @@ mod tests {
         }
         msgs(deliver(&mut m, 1, ALIGN_RUN as u64, now));
         // Lining up applies the held print (its event was a copy).
-        assert_eq!(msgs(deliver(&mut m, 2, ALIGN_RUN as u64, now)), vec![(2, print.clone())]);
+        assert_eq!(
+            msgs(deliver(&mut m, 2, ALIGN_RUN as u64, now)),
+            vec![(2, print.clone())]
+        );
         assert!(m.in_line(2));
         assert_eq!(m.other(1, key, &print, now), Step::Duplicate);
         // Too many held prints: out of line, not taken over with some missing.
@@ -1341,7 +1399,10 @@ mod tests {
         m.snapshot(3, 1, &snap("D"), at(2_000));
         assert!(m.tick(at(5_000), &differs).is_empty());
         let expired = m.tick(at(12_000), &differs);
-        assert!(matches!(&expired[..], [Expired::Rebuild(3, applied)] if applied.len() == 2), "{expired:?}");
+        assert!(
+            matches!(&expired[..], [Expired::Rebuild(3, applied)] if applied.len() == 2),
+            "{expired:?}"
+        );
         assert!(m.in_line(3) && !m.in_line(1) && !m.in_line(2));
         // Fewer than ALIGN_RUN held events that match the log's last ones line a
         // connection up once the market is quiet, and only when its own view
@@ -1387,7 +1448,8 @@ mod tests {
         assert_eq!(stored.len(), 2);
         let seen = std::cell::RefCell::new(Vec::new());
         let differs = |view: &[&Value]| {
-            seen.borrow_mut().push(view.iter().map(|msg| *msg as *const Value).collect::<Vec<_>>());
+            seen.borrow_mut()
+                .push(view.iter().map(|msg| *msg as *const Value).collect::<Vec<_>>());
             false
         };
         // Busy (an event applied within QUIET), then quiet with a young snapshot:

@@ -224,7 +224,7 @@ impl MarketData {
     }
     /// The stream is connected and delivered a frame within LIVENESS, the
     /// connect itself not counting (a server that takes the handshake and then
-    /// sends nothing never feeds it): the market maker's fault halt.
+    /// sends nothing never feeds it).
     pub fn is_fed_at(&self, now: Instant) -> bool {
         let s = self.0.read();
         s.connected && s.frame.is_some_and(|at| now.saturating_duration_since(at) <= LIVENESS)
@@ -247,9 +247,7 @@ impl MarketData {
     pub fn book_message(&self, token: &str) -> Option<Value> {
         let s = self.0.read();
         let q = s.quotes.get(token)?.as_ref()?;
-        let level = |(price, size): (u32, f64)| {
-            serde_json::json!({"price": format!("{:.6}", price as f64 / PRICE_UNIT), "size": size.to_string()})
-        };
+        let level = |(price, size): (u32, f64)| serde_json::json!({"price": format!("{:.6}", price as f64 / PRICE_UNIT), "size": size.to_string()});
         Some(serde_json::json!({
             "event_type": "book", "asset_id": token, "market": "test", "timestamp": q.timestamp.to_string(),
             "hash": "test",
@@ -352,10 +350,7 @@ impl MarketData {
                 .quotes
                 .get(token)
                 .ok_or_else(|| anyhow::anyhow!("Order token is outside the decision market"))?;
-            ensure!(
-                price.is_finite() && price > 0.0 && price < 1.0,
-                "Invalid limit price"
-            );
+            ensure!(price.is_finite() && price > 0.0 && price < 1.0, "Invalid limit price");
             // Compared as the exact amounts the order is signed with.
             let buy = action == "BUY";
             let opposite = uncrossed_best(q, buy, departing);
@@ -372,10 +367,7 @@ impl MarketData {
             .quotes
             .get(token)
             .ok_or_else(|| anyhow::anyhow!("Order token is outside the decision market"))?;
-        ensure!(
-            price.is_finite() && price > 0.0 && price < 1.0,
-            "Invalid limit price"
-        );
+        ensure!(price.is_finite() && price > 0.0 && price < 1.0, "Invalid limit price");
         if post_only {
             ensure!(
                 if action == "BUY" {
@@ -460,9 +452,7 @@ impl MarketData {
                     match (number(&change["best_bid"]), number(&change["best_ask"])) {
                         (Some(bid), Some(ask)) if bid >= 0.0 && ask <= 1.0 => {
                             let (bid, ask) = ((bid > 0.0).then_some(bid), (ask < 1.0).then_some(ask));
-                            let level = (event == "price_change")
-                                .then(|| level_change(change))
-                                .flatten();
+                            let level = (event == "price_change").then(|| level_change(change)).flatten();
                             match level {
                                 Some(Err(())) => None, // a malformed level change
                                 level => {
@@ -519,7 +509,11 @@ fn uncrossed_best(q: &Quote, buy: bool, departing: &[(u32, f64)]) -> Option<u32>
         return reported;
     }
     let others = |(price, size): (u32, f64)| {
-        let ours: f64 = departing.iter().filter(|(at, _)| *at == price).map(|(_, shares)| shares).sum();
+        let ours: f64 = departing
+            .iter()
+            .filter(|(at, _)| *at == price)
+            .map(|(_, shares)| shares)
+            .sum();
         (size > ours + 1e-9).then_some(price)
     };
     if buy {
@@ -613,7 +607,7 @@ pub fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-/// What the feed's replay (ws/feed_replay.rs) reads of a MarketData.
+/// A digest of everything a MarketData holds, for comparing two runs in tests.
 #[cfg(test)]
 impl MarketData {
     /// Everything it holds but the stream's receive instants (local clock):
@@ -727,8 +721,10 @@ mod tests {
         let decision = d.snapshot_at(start, now_ms()).unwrap();
         assert!(d.validate(&decision, "123", "BUY", 0.4, true).is_ok());
         assert!(decision.max_age_ms() < 1_000); // the stream's age, not the book's
-        // A decision still has to reach its order check promptly.
-        let taken = start.checked_sub(MAX_DECISION_AGE + Duration::from_millis(100)).unwrap();
+                                                // A decision still has to reach its order check promptly.
+        let taken = start
+            .checked_sub(MAX_DECISION_AGE + Duration::from_millis(100))
+            .unwrap();
         let expired = d.snapshot_at(taken, now_ms()).unwrap();
         let error = d.validate(&expired, "123", "BUY", 0.4, true).unwrap_err();
         assert!(error.to_string().contains("expired"), "{error}");
@@ -742,45 +738,69 @@ mod tests {
     fn depth_follows_books_level_changes_and_trades() {
         let d = fixture();
         let now = now_ms();
-        d.ingest(&json!({"event_type":"book","asset_id":"123","timestamp":now.to_string(),
+        d.ingest(
+            &json!({"event_type":"book","asset_id":"123","timestamp":now.to_string(),
             "bids":[{"price":"0.40","size":"10"},{"price":"0.39","size":"5"},{"price":"0.38","size":"0"}],
-            "asks":[{"price":"0.42","size":"7"},{"price":"0.455","size":"3"}]}));
+            "asks":[{"price":"0.42","size":"7"},{"price":"0.455","size":"3"}]}),
+        );
         let depth = d.snapshot().unwrap().depth("123").unwrap().clone();
         assert_eq!(depth.best_bid(), Some((400_000, 10.0)));
-        assert_eq!(depth.ask_levels().collect::<Vec<_>>(), vec![(420_000, 7.0), (455_000, 3.0)]);
+        assert_eq!(
+            depth.ask_levels().collect::<Vec<_>>(),
+            vec![(420_000, 7.0), (455_000, 3.0)]
+        );
         assert_eq!(depth.bid_depth_from(390_000), 15.0);
         assert_eq!(depth.ask_depth_to(450_000), 7.0);
         // A new best bid inside the spread, then a level removed.
-        d.ingest(&json!({"event_type":"price_change","timestamp":now + 1,"price_changes":[
+        d.ingest(
+            &json!({"event_type":"price_change","timestamp":now + 1,"price_changes":[
             {"asset_id":"123","price":"0.41","size":"4","side":"BUY","best_bid":"0.41","best_ask":"0.42"},
-            {"asset_id":"123","price":"0.455","size":"0","side":"SELL","best_bid":"0.41","best_ask":"0.42"}]}));
+            {"asset_id":"123","price":"0.455","size":"0","side":"SELL","best_bid":"0.41","best_ask":"0.42"}]}),
+        );
         let snapshot = d.snapshot().unwrap();
         assert_eq!(snapshot.best_bid("123"), Some(0.41));
         let depth = snapshot.depth("123").unwrap();
-        assert_eq!(depth.bid_levels().collect::<Vec<_>>(), vec![(410_000, 4.0), (400_000, 10.0), (390_000, 5.0)]);
+        assert_eq!(
+            depth.bid_levels().collect::<Vec<_>>(),
+            vec![(410_000, 4.0), (400_000, 10.0), (390_000, 5.0)]
+        );
         assert_eq!(depth.ask_levels().collect::<Vec<_>>(), vec![(420_000, 7.0)]);
         // A trade took the 0.41 and 0.40 bids; the next change reports the new best
         // before any book arrives, so levels above it are gone.
-        d.ingest(&json!({"event_type":"price_change","timestamp":now + 2,"price_changes":[
-            {"asset_id":"123","price":"0.43","size":"2","side":"SELL","best_bid":"0.39","best_ask":"0.42"}]}));
+        d.ingest(
+            &json!({"event_type":"price_change","timestamp":now + 2,"price_changes":[
+            {"asset_id":"123","price":"0.43","size":"2","side":"SELL","best_bid":"0.39","best_ask":"0.42"}]}),
+        );
         let depth = d.snapshot().unwrap().depth("123").unwrap().clone();
         assert_eq!(depth.bid_levels().collect::<Vec<_>>(), vec![(390_000, 5.0)]);
-        assert_eq!(depth.ask_levels().collect::<Vec<_>>(), vec![(420_000, 7.0), (430_000, 2.0)]);
+        assert_eq!(
+            depth.ask_levels().collect::<Vec<_>>(),
+            vec![(420_000, 7.0), (430_000, 2.0)]
+        );
         // The older snapshot keeps its own copy.
         assert_eq!(snapshot.depth("123").unwrap().best_bid(), Some((410_000, 4.0)));
         // A quote-only update moves the best to a level the depth lacks: no depth
         // until a change or book restores it.
-        d.ingest(&json!({"event_type":"best_bid_ask","asset_id":"123","timestamp":now + 2,
-            "best_bid":"0.40","best_ask":"0.42"}));
+        d.ingest(
+            &json!({"event_type":"best_bid_ask","asset_id":"123","timestamp":now + 2,
+            "best_bid":"0.40","best_ask":"0.42"}),
+        );
         let snapshot = d.snapshot().unwrap();
         assert_eq!(snapshot.best_bid("123"), Some(0.40));
         assert!(snapshot.depth("123").is_none());
-        d.ingest(&json!({"event_type":"price_change","timestamp":now + 2,"price_changes":[
-            {"asset_id":"123","price":"0.40","size":"6","side":"BUY","best_bid":"0.40","best_ask":"0.42"}]}));
-        assert_eq!(d.snapshot().unwrap().depth("123").unwrap().best_bid(), Some((400_000, 6.0)));
+        d.ingest(
+            &json!({"event_type":"price_change","timestamp":now + 2,"price_changes":[
+            {"asset_id":"123","price":"0.40","size":"6","side":"BUY","best_bid":"0.40","best_ask":"0.42"}]}),
+        );
+        assert_eq!(
+            d.snapshot().unwrap().depth("123").unwrap().best_bid(),
+            Some((400_000, 6.0))
+        );
         // A malformed level drops the quote until a full book arrives.
-        d.ingest(&json!({"event_type":"price_change","timestamp":now + 3,"price_changes":[
-            {"asset_id":"123","price":"0.4x","size":"2","side":"BUY","best_bid":"0.39","best_ask":"0.42"}]}));
+        d.ingest(
+            &json!({"event_type":"price_change","timestamp":now + 3,"price_changes":[
+            {"asset_id":"123","price":"0.4x","size":"2","side":"BUY","best_bid":"0.39","best_ask":"0.42"}]}),
+        );
         assert!(d.snapshot().is_err());
         assert_eq!(price_units(&json!("0.0005")), Some(500));
         assert_eq!(price_units(&json!("1")), Some(1_000_000));
@@ -791,22 +811,25 @@ mod tests {
     fn non_crossing_check_accepts_new_best_prices_on_a_moving_book() {
         let d = fixture(); // 0.40 / 0.42 on both tokens
         let decision = d.snapshot().unwrap();
-        let check = |price: f64, action: &str| {
-            d.validate_with(&decision, "123", action, price, true, QuoteCheck::NonCrossing)
-        };
+        let check =
+            |price: f64, action: &str| d.validate_with(&decision, "123", action, price, true, QuoteCheck::NonCrossing);
         assert!(check(0.41, "BUY").is_ok()); // creates a level; Decision would refuse it
         assert!(d.validate(&decision, "123", "BUY", 0.41, true).is_err());
         assert!(check(0.42, "BUY").is_err() && check(0.40, "SELL").is_err());
         assert!(check(0.41, "SELL").is_ok());
         assert!(check(0.42 - 1e-15, "BUY").is_err()); // signs as 0.42
-        // The top moved since the decision: only crossing the latest quote refuses.
-        d.ingest(&json!({"event_type":"price_change","timestamp":now_ms(),"price_changes":[
-            {"asset_id":"123","price":"0.415","size":"5","side":"SELL","best_bid":"0.40","best_ask":"0.415"}]}));
+                                                      // The top moved since the decision: only crossing the latest quote refuses.
+        d.ingest(
+            &json!({"event_type":"price_change","timestamp":now_ms(),"price_changes":[
+            {"asset_id":"123","price":"0.415","size":"5","side":"SELL","best_bid":"0.40","best_ask":"0.415"}]}),
+        );
         assert!(d.validate(&decision, "123", "BUY", 0.40, true).is_err());
         assert!(check(0.41, "BUY").is_ok() && check(0.415, "BUY").is_err());
         // A tick-size change voids the decision even after a new book arrives.
         let before_tick = d.snapshot().unwrap();
-        d.ingest(&json!({"event_type":"tick_size_change","asset_id":"123","timestamp":now_ms(),"new_tick_size":"0.001"}));
+        d.ingest(
+            &json!({"event_type":"tick_size_change","asset_id":"123","timestamp":now_ms(),"new_tick_size":"0.001"}),
+        );
         d.ingest(&book("123", now_ms()));
         assert!(d
             .validate_with(&before_tick, "123", "BUY", 0.41, true, QuoteCheck::NonCrossing)
@@ -814,7 +837,9 @@ mod tests {
             .to_string()
             .contains("Tick size"));
         // Taker orders keep the strict check; a reconnect voids the decision.
-        assert!(d.validate_with(&decision, "123", "BUY", 0.40, false, QuoteCheck::NonCrossing).is_err());
+        assert!(d
+            .validate_with(&decision, "123", "BUY", 0.40, false, QuoteCheck::NonCrossing)
+            .is_err());
         d.disconnect();
         d.connected();
         d.ingest(&json!([book("123", now_ms()), book("456", now_ms())]));
@@ -825,7 +850,15 @@ mod tests {
         let d = fixture(); // 0.40 / 0.42, 10 shares each, on both tokens
         let decision = d.snapshot().unwrap();
         let check = |price: f64, action: &str, departing: &[(u32, f64)]| {
-            d.validate_excluding(&decision, "123", action, price, true, QuoteCheck::NonCrossing, departing)
+            d.validate_excluding(
+                &decision,
+                "123",
+                action,
+                price,
+                true,
+                QuoteCheck::NonCrossing,
+                departing,
+            )
         };
         let error = check(0.42, "BUY", &[]).unwrap_err();
         assert!(error.is::<WouldCross>(), "{error:#}");
@@ -842,8 +875,10 @@ mod tests {
         assert!(check(0.45, "BUY", &[(420_000, 10.0)]).unwrap_err().is::<WouldCross>());
         assert!(check(0.45, "BUY", &[(420_000, 10.0), (450_000, 5.0)]).is_ok());
         // A depth that does not match the reported best prices ignores nothing.
-        d.ingest(&json!({"event_type":"best_bid_ask","asset_id":"123","timestamp":now_ms(),
-            "best_bid":"0.40","best_ask":"0.41"}));
+        d.ingest(
+            &json!({"event_type":"best_bid_ask","asset_id":"123","timestamp":now_ms(),
+            "best_bid":"0.40","best_ask":"0.41"}),
+        );
         assert!(d.snapshot().unwrap().depth("123").is_none());
         assert!(check(0.41, "BUY", &[(410_000, 10.0)]).unwrap_err().is::<WouldCross>());
     }
@@ -884,7 +919,10 @@ mod tests {
         let before = book_ptr(&d, "123");
         assert!(d.ingest(&change("0.39", "7")));
         assert_eq!(book_ptr(&d, "123"), before, "no copy while nothing else holds the book");
-        assert_eq!(d.state_of("123").unwrap().3.bid_levels().collect::<Vec<_>>(), vec![(400_000, 10.0), (390_000, 7.0)]);
+        assert_eq!(
+            d.state_of("123").unwrap().3.bid_levels().collect::<Vec<_>>(),
+            vec![(400_000, 10.0), (390_000, 7.0)]
+        );
         // A decision snapshot holds it: the change goes to a copy, the snapshot keeps its own.
         let snapshot = d.snapshot().unwrap();
         assert!(d.ingest(&change("0.38", "3")));
@@ -975,7 +1013,10 @@ mod tests {
                 }
                 assert_eq!(in_place.snapshot().is_ok(), copied.snapshot().is_ok());
                 // The held snapshot never saw the change.
-                assert_eq!(held.as_ref().map(|s| (s.best_bid("U"), s.depth("U").cloned())), held_quotes);
+                assert_eq!(
+                    held.as_ref().map(|s| (s.best_bid("U"), s.depth("U").cloned())),
+                    held_quotes
+                );
                 checked += 1;
             }
         }
@@ -989,7 +1030,9 @@ mod tests {
         d.ingest(&json!({"event_type":"book","asset_id":"123","timestamp":now_ms(),
             "bids":[{"price":"0.41","size":"10"}],"asks":[{"price":"0.43","size":"10"}]}));
         assert_eq!(d.tick_epoch(), epoch); // quotes alone never invalidate book rules
-        d.ingest(&json!({"event_type":"tick_size_change","asset_id":"123","timestamp":now_ms(),"new_tick_size":"0.001"}));
+        d.ingest(
+            &json!({"event_type":"tick_size_change","asset_id":"123","timestamp":now_ms(),"new_tick_size":"0.001"}),
+        );
         assert_eq!(d.tick_epoch(), epoch + 1);
         d.ingest(&json!({"event_type":"price_change","timestamp":now_ms(),
             "price_changes":[{"asset_id":"123","best_bid":"0.4","best_ask":"0.42"}]}));

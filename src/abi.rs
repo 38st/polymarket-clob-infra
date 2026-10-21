@@ -75,12 +75,7 @@ impl Token {
             DynSolValue::Uint(value, _) => Token::Uint(value),
             DynSolValue::Address(address) => Token::Address(address),
             DynSolValue::FixedBytes(word, size) => Token::FixedBytes(word[..size].to_vec()),
-            DynSolValue::Array(items) => Token::Array(
-                items
-                    .into_iter()
-                    .map(Token::from_dyn)
-                    .collect::<Result<_>>()?,
-            ),
+            DynSolValue::Array(items) => Token::Array(items.into_iter().map(Token::from_dyn).collect::<Result<_>>()?),
             _ => anyhow::bail!("Unsupported ABI value"),
         })
     }
@@ -148,7 +143,10 @@ mod tests {
         call.extend(encode(&[Token::Address(owner), Token::Uint(U256::from(123u64))]));
         assert_eq!(
             hex::encode(call),
-            format!("00fdd58e{:0>64}{:064x}", "1111111111111111111111111111111111111111", 123)
+            format!(
+                "00fdd58e{:0>64}{:064x}",
+                "1111111111111111111111111111111111111111", 123
+            )
         );
         // Dynamic arrays round-trip canonically and reject truncation.
         let tokens = vec![
@@ -170,7 +168,10 @@ mod tests {
             "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
         );
         assert!(u256_dec("0x10").is_err() && u256_dec("").is_err());
-        assert_eq!(u256_dec("12345678901234567890").unwrap().to_string(), "12345678901234567890");
+        assert_eq!(
+            u256_dec("12345678901234567890").unwrap().to_string(),
+            "12345678901234567890"
+        );
         assert_eq!(address_hex(U256::from(0x44u64)).unwrap(), format!("0x{:040x}", 0x44));
         assert!(address_hex(U256::MAX).is_err());
     }
