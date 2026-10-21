@@ -1,0 +1,32 @@
+[package]
+name = "polymarket-clob-infra"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+description = "Market-data, signing and accounting infrastructure from a Rust market maker on a central-limit-order-book prediction market"
+publish = false
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "native-tls-alpn"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+alloy-primitives = "1.7"
+alloy-dyn-abi = "1.7"
+k256 = { version = "0.13", features = ["ecdsa"] }
+anyhow = "1"
+parking_lot = "0.12"
+hex = "0.4"
+rand = "0.9"
+zeroize = "1.8"
+tracing = "0.1"
+
+[dev-dependencies]
+flate2 = "1"
+futures-util = "0.3"
+
+[profile.release]
+overflow-checks = true
